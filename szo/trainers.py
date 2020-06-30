@@ -11,7 +11,7 @@ import scipy
 import torch
 from torch.utils.tensorboard import SummaryWriter
 #from tensorboardX import SummaryWriter
-from util import plot_confusion_matrix
+from util import pearsonr, corrcoef
 
 from time import time
 from collections import defaultdict
@@ -45,8 +45,8 @@ class Trainer(object):
 
         # for logging
         self.label = label
-        #self.log_dir = log_dir+'/'+self.label
-        self.tb_writer = SummaryWriter(log_dir+'/'+self.label)
+        self.log_dir = log_dir
+        self.tb_writer = SummaryWriter(self.log_dir+'/'+self.label)
         self.steps = 0
         self.history = []
 
@@ -55,6 +55,9 @@ class Trainer(object):
 
         self.return_probs = True if 'Bandit' in self.optimizer.__repr__() else False
         self.n_gpu = torch.cuda.device_count() if torch.cuda.is_available() else 0
+
+        self.duration = 0.0
+        self.threshold = 1.0e-6
 
     def validate(self, dataloader, mode='test'):
         logger.debug(f'Validation - mode: {mode}')
@@ -158,7 +161,10 @@ class Trainer(object):
                 self._g_prev = true_grad.detach().cpu()
 
             # step
+            start_update = time()
             self.optimizer.step(closure)
+            end_update = time()
+            self.duration += end_update - start_update
             assert batch_idx == self.optimizer.update_counter, (batch_idx, self.optimizer.update_counter)
 
             # store initial gradients after first update
@@ -257,17 +263,101 @@ class Trainer(object):
             g_approx_abs = torch.abs(g_approx)
             self.tb_writer.add_histogram("gradients/approx_train", g_approx_abs, self.steps)
 
+            w_abs = torch.abs(self.optimizer.w.cpu())
+
             # plot true gradients statistics
             if len(self.model.g_history) > 1:
-                g_true_norm = torch.norm(self.model.g_history[-1], p=2) ** 2 # = || \nabla f(w^t) ||^2
+                g_true = self.model.g_history[-1]
+                g_true_norm = torch.norm(g_true, p=2) ** 2 # = || \nabla f(w^t) ||^2
                 self.tb_writer.add_scalar("gradients/norm_true_train", g_true_norm, self.steps)
-                g_true_abs = torch.abs(self.model.g_history[-1])
+                g_true_abs = torch.abs(g_true)
                 self.tb_writer.add_histogram("gradients/true_train", g_true_abs, self.steps)
-                zero_count = torch.sum(self.model.g_history[-1] == 0.0)
-                self.tb_writer.add_scalar("gradients/sparsity_true", zero_count/list(self.model.g_history[-1].shape)[0], self.steps)
+                #zero_count = torch.sum(g_true == 0.0)
+                #self.tb_writer.add_scalar("sparsity/true_train", zero_count/g_dim, self.steps)
+
+
+                # sparsity
+                g_dim = list(g_true.shape)[0]
+                #g_true_over_zero = torch.where(g_true_abs > self.threshold, g_true, torch.zeros(g_dim).cpu())
+                #g_true_near_zero_count = torch.sum(g_true_abs < self.threshold)
+                #g_true_over_zero_count = torch.sum(g_true_abs >= self.threshold)
+                #g_true_nonzero_count = torch.sum(g_true != 0.0)
+                #g_true_zero_count = torch.sum(g_true == 0.0)
+                #g_approx_over_zero = torch.where(g_approx_abs > self.threshold, g_approx, torch.zeros(g_dim).cpu())
+                #g_approx_near_zero_count = torch.sum(g_approx_abs < self.threshold)
+                #g_approx_over_zero_count = torch.sum(g_approx_abs >= self.threshold)
+                #g_approx_nonzero_count = torch.sum(g_approx != 0.0)
+                #g_approx_zero_count = torch.sum(g_approx == 0.0)
+                #assert g_approx_near_zero_count + g_approx_over_zero_count == g_dim, (g_approx_near_zero_count, g_approx_over_zero_count, g_dim)
+                #assert g_true_near_zero_count + g_true_over_zero_count == g_dim, (g_true_near_zero_count, g_true_over_zero_count, g_dim)
+
+
+                if self.optimizer.prune_or_freeze == 'none':
+                    # save true grads
+                    np.save(f'{self.log_dir}/g_true_{self.steps}.npy', g_true.numpy())
+                    ground_truth = g_true
+                else:
+                    ground_truth_log_dir = self.log_dir.replace('freeze', 'none').replace('prune', 'none').replace('heldout', 'none').replace('random', 'none').replace('L1', 'none')
+                    ground_truth = torch.tensor(np.load(f'{ground_truth_log_dir}/g_true_{self. steps}.npy')).cpu()
+                    if ground_truth is None:
+                        raise Error
+
+                ground_truth_abs = torch.abs(ground_truth)
+                #tp_filter = torch.zeros(g_dim).cpu()
+                tn_filter = torch.zeros(g_dim).cpu()
+                fp_filter = torch.zeros(g_dim).cpu()
+                fn_filter = torch.zeros(g_dim).cpu()
+                tp_count = 0.0
+                g_true_exact_zero_count = 0.0
+                g_true_near_zero_count = 0.0
+                g_true_over_zero_count = 0.0
+                g_approx_exact_zero_count = 0.0
+                g_approx_near_zero_count = 0.0
+                g_approx_over_zero_count = 0.0
+                for i in range(g_dim):
+                    #tp_filter[i] = 1.0 if (ground_truth[i].item() < self.threshold and g_approx[i].item() < self.threshold) else 0.0
+                    tn_filter[i] = 1.0 if (ground_truth[i].item() >= self.threshold and g_approx[i].item() >= self.threshold) else 0.0
+                    fp_filter[i] = 1.0 if (ground_truth[i].item() >= self.threshold and g_approx[i].item() < self.threshold) else 0.0
+                    fn_filter[i] = 1.0 if (ground_truth[i].item() < self.threshold and g_approx[i].item() >= self.threshold) else 0.0
+                    tp_count += 1.0 if (ground_truth[i].item() < self.threshold and g_approx[i].item() < self.threshold) else 0.0
+                    g_true_exact_zero_count += 1.0 if ground_truth[i].item() == 0.0 else 0.0
+                    g_true_near_zero_count += 1.0 if ground_truth[i].item() < self.threshold else 0.0
+                    g_true_over_zero_count += 1.0 if ground_truth[i].item() >= self.threshold else 0.0
+                    g_approx_exact_zero_count += 1.0 if g_approx[i].item() == 0.0 else 0.0
+                    g_approx_near_zero_count += 1.0 if g_approx[i].item() < self.threshold else 0.0
+                    g_approx_over_zero_count += 1.0 if g_approx[i].item() >= self.threshold else 0.0
+
+                #true_positives = torch.where(tp_filter.to(dtype=torch.bool), ground_truth_abs, torch.zeros(g_dim).cpu())
+                true_negatives = torch.where(tn_filter.to(dtype=torch.bool), torch.abs(ground_truth - g_approx), torch.zeros(g_dim).cpu())
+                true_negatives_abs = torch.where(tn_filter.to(dtype=torch.bool), torch.abs(ground_truth_abs - g_approx_abs), torch.zeros(g_dim).cpu())
+                false_positives = torch.where(fp_filter.to(dtype=torch.bool), ground_truth_abs, torch.zeros(g_dim).cpu())
+                false_negatives = torch.where(fn_filter.to(dtype=torch.bool), g_approx_abs, torch.zeros(g_dim).cpu())
+                assert g_approx_near_zero_count + g_approx_over_zero_count == g_dim, (g_approx_near_zero_count, g_approx_over_zero_count, g_dim)
+                assert g_true_near_zero_count + g_true_over_zero_count == g_dim, (g_true_near_zero_count, g_true_over_zero_count, g_dim)
+                assert tp_count <= g_true_near_zero_count, (tp_count, g_true_near_zero_count)
+                assert tp_count <= g_approx_near_zero_count, (tp_count, g_approx_near_zero_count)
+                assert torch.sum(tn_filter) <= g_true_over_zero_count, (torch.sum(tn_filter), g_true_over_zero_count)
+                assert torch.sum(tn_filter) <= g_approx_over_zero_count, (torch.sum(tn_filter), g_approx_over_zero_count)
+                self.tb_writer.add_scalar("sparsity/g_approx_zero_count", g_approx_exact_zero_count, self.steps)
+                self.tb_writer.add_scalar("sparsity/g_approx_near_zero_count", g_approx_near_zero_count, self.steps)
+                self.tb_writer.add_scalar("sparsity/g_true_zero_count", g_true_exact_zero_count, self.steps)
+                self.tb_writer.add_scalar("sparsity/g_true_near_zero_count", g_true_near_zero_count, self.steps)
+                self.tb_writer.add_scalar("sparsity/true_positives_count", tp_count, self.steps)
+                self.tb_writer.add_scalar("sparsity/true_negatives_count", torch.sum(tn_filter), self.steps)
+                self.tb_writer.add_scalar("sparsity/false_positives_count", torch.sum(fp_filter), self.steps)
+                self.tb_writer.add_scalar("sparsity/false_negatives_count", torch.sum(fn_filter), self.steps)
+                self.tb_writer.add_scalar("sparsity/relative_error_true_negatives", torch.sum(true_negatives), self.steps)
+                self.tb_writer.add_scalar("sparsity/relative_error_true_negatives_abs", torch.sum(true_negatives_abs), self.steps)
+                self.tb_writer.add_scalar("sparsity/relative_error_false_negatives", torch.sum(false_negatives), self.steps)
+                self.tb_writer.add_scalar("sparsity/relative_error_false_positives", torch.sum(false_positives), self.steps)
+                self.tb_writer.add_scalar("sparsity/correl_true_approx", pearsonr(ground_truth_abs, g_approx_abs), self.steps)
+                self.tb_writer.add_scalar("sparsity/correl_true_weights", pearsonr(ground_truth_abs, w_abs), self.steps)
+                self.tb_writer.add_scalar("sparsity/correl_approx_weights", pearsonr(g_approx_abs, w_abs), self.steps)
+                del ground_truth
+                del ground_truth_abs
 
             # plot weights
-            self.tb_writer.add_histogram("weights", torch.abs(self.optimizer.w), self.steps)
+            self.tb_writer.add_histogram("weights", w_abs, self.steps)
             #for name, params in self.model.named_parameters():
             #    if name.endswith('weight'):
             #        self.tb_writer.add_histogram("magnitude/"+name, torch.abs(params), self.steps)
@@ -377,7 +467,7 @@ class Trainer(object):
         # call self.optimizer.prune()
         if self.masking_strategy == 'L1':
             magnitude = self.optimizer.prune(survive_vec, offset_to_prune + num_to_prune, None)
-        elif self.masking_strategy == 'random':
+        elif self.masking_strategy == 'heldout':
             self.model.eval()
 
             # return numpy float
@@ -399,6 +489,9 @@ class Trainer(object):
 
             _ = self.optimizer.prune(survive_vec, offset_to_prune + num_to_prune, dev_score_closure)
 
+        elif self.masking_strategy == 'random':
+            _ = self.optimizer.prune(survive_vec, offset_to_prune + num_to_prune, 'random')
+
         # log
         sparsity_after, num_active_after = self.optimizer.check_sparsity()
         logger.info(f'Prune (total dim: {self.optimizer.w.numel()}):')
@@ -406,11 +499,11 @@ class Trainer(object):
         if self.masking_strategy == 'L1':
             logger.info(f' - cutoff magnitude: {magnitude}')
         log_string = f' - before prune - sparsity: {sparsity_before} - num_active: {num_active_before}'
-        if self.masking_strategy == 'random' and self.optimizer.dev_scores is not None:
+        if self.masking_strategy == 'heldout' and self.optimizer.dev_scores is not None:
             log_string += f' - dev score: {self.optimizer.dev_scores[0]}'
         logger.info(log_string)
         log_string = f' -  after prune - sparsity: {sparsity_after} - num_active: {num_active_after}'
-        if self.masking_strategy == 'random' and self.optimizer.dev_scores is not None:
+        if self.masking_strategy == 'heldout' and self.optimizer.dev_scores is not None:
             log_string += f' - best dev score: {self.optimizer.dev_scores[1]}'
             log_string += f' - worst dev score: {self.optimizer.dev_scores[2]}'
             log_string += f' - std: {self.optimizer.dev_scores[3]}'
@@ -486,12 +579,14 @@ class Trainer(object):
                 if self.scheduler:
                     self.scheduler.step(test_results[self.obj_metrics])
 
+            logger.info(f"Update Time (cumulative) # {r}: {self.duration} [sec]")
             logger.info(f"Total Time in Round # {r}: {(time()-start_round)/60} [min]")
 
             # prune
             if self.optimizer.prune_or_freeze != 'none' and self.pruning_rate > 0.0 and r < self.num_rounds-1:
                 num_to_prune = self.prune(devloader, r)
 
+        logger.info(f"Update Time: {self.duration} [sec]")
         logger.info(f"Total Time: {(time()-start_train)/60} [min]")
 
         #self.history.append({'histogram': self._tmp_histogram})

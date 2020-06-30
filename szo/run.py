@@ -33,7 +33,7 @@ def main():
     ap.add_argument("--mu", default=0.1, type=float, help="exploration rate, smoothing parameter")
     ap.add_argument("--beta", default=0.0, type=float, help="momentum")
     ap.add_argument("--max_grad_norm", default=0.0, type=float, help="maximum gradient norm")
-    ap.add_argument("--var", default=0.1, type=float, help="noise variance")
+    ap.add_argument("--var", default=1.0, type=float, help="noise variance")
     ap.add_argument("--eval_interval", default=10000, type=int, help="evaluation interval")
     ap.add_argument("--batch_size", default=64, type=int, help="batch_size")
     ap.add_argument("--eval_batch_size", default=1000, type=int, help="batch size used in evaluation")
@@ -45,8 +45,8 @@ def main():
                     help="reward function: one of {nce, acc, expected_reward, sampled_score}")
     ap.add_argument("--prune_or_freeze", choices=["none", "prune", "freeze"],
                     help="sparsification strategy: one of {prune or freeze}")
-    ap.add_argument("--masking_strategy", choices=["none", "L1", "random"],
-                    help="masking strategy: one of {none, L1, random}")
+    ap.add_argument("--masking_strategy", choices=["none", "L1", "heldout", "random"],
+                    help="masking strategy: one of {none, L1, heldout, random}")
     ap.add_argument("--num_samples", type=int, help="number of samples to evaluate for gradient estimation")
     ap.add_argument("--device", choices=["cpu", "gpu"], default="cpu")
     ap.add_argument('--affine', action="store_true", default=False, # type=bool,

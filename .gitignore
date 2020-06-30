@@ -1,0 +1,10 @@
+szo/__pycache__/
+.idea/
+.ipynb_checkpoints/
+data/
+logs*
+runs*
+attacks*
+tmp*
+plots/*.png
+

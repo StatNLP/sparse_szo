@@ -180,6 +180,12 @@ class BaseEvolutionOptimizer(torch.optim.Optimizer):
             #assert max(scores) == best_score
             self._mask = best_mask
             self.dev_scores = (prev_score, best_score, min(scores), np.std(scores))
+
+        elif closure == 'random':
+            random_mask = torch.ones_like(self._mask) # place holder with ones
+            mask_idx = torch.randperm(self._w_dim) # permute indices to be masked
+            random_mask[mask_idx[:num_to_prune]] = 0.0
+            self._mask =  random_mask
         else:
             raise ValueError
 
