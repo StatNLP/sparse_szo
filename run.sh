@@ -11,7 +11,7 @@ model=$3
 
 for prune_or_freeze in prune freeze
 do
-    for masking_strategy in random L1
+    for masking_strategy in random heldout L1
     do
         python ./szo/run.py \
 		    --seed=$seed \
