@@ -1,5 +1,7 @@
 # sparse_szo
-Sparse Perturbations for Improved Convergence in Stochastic Zeroth-Order Optimization
+**Sparse Perturbations for Improved Convergence in Stochastic Zeroth-Order Optimization** [[arxiv](https://arxiv.org/abs/2006.01759)]
+
+- Our paper got a "special mention" at [LOD 2020 best paper award](https://lod2020.icas.xyz/best-paper-award/)!
 
 ### Results
 accuracy  
